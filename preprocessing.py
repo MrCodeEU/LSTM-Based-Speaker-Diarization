@@ -26,7 +26,7 @@ def load_segments(xml_file):
     return segments
 
 
-def apply_vad(segments, sr, vad_aggressiveness=3):
+def apply_vad(segments, sr, vad_aggressiveness=2):
     vad = webrtcvad.Vad(vad_aggressiveness)
 
     speech_segments = []

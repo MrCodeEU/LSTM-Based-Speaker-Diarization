@@ -56,7 +56,7 @@ def average_d_vectors(segment_d_vectors):
 
 
 def run_diarization(audio_path, model_path, segment_length=30, overlap=10, num_speakers=None,
-                    target_segment_length=400, seed=None, sigma=6.5, percentile=60, callhome_index=0):
+                    target_segment_length=200, seed=None, sigma=6.5, percentile=60, callhome_index=0):
     hp = Hyperparameters()
     # Load the trained LSTM model
     input_size = hp.input_size
@@ -103,7 +103,7 @@ def run_diarization(audio_path, model_path, segment_length=30, overlap=10, num_s
     num_segments = len(segments)
     print(f"Number of segments: {num_segments}")
     # Apply VAD to remove non-speech segments
-    segments = apply_vad(segments, sr)
+    segments = apply_vad(segments, sr, hp.vad_mode)
     print(f"Number of speech segments: {len(segments)}")
     # Extract d-vectors from the segments
     d_vectors = []
@@ -162,7 +162,7 @@ def run_diarization(audio_path, model_path, segment_length=30, overlap=10, num_s
     print("Number of speakers after filtering: ", len(np.unique([s[2] for s in speaker_segments])))
 
     # groups consecutive segments with the same speaker
-    # speaker_segments = group_segments(speaker_segments)
+    speaker_segments = group_segments(speaker_segments)
 
     speaker_segments_annotations = Annotation()
     # Print the diarization results
@@ -186,7 +186,7 @@ def run_diarization(audio_path, model_path, segment_length=30, overlap=10, num_s
 
 def group_segments(speaker_segments):
     # group consecutive segments with the same speaker, accommodating gaps with smoothing
-    SMOOTHING_FACTOR = 0.3  # Maximum gap size to tolerate
+    SMOOTHING_FACTOR = 0.2  # Maximum gap size to tolerate
     speaker_segments_grouped = []
     for start_time, end_time, speaker_id in speaker_segments:
         # Check if it's the same speaker AND if the segments are close enough (or overlapping)
@@ -206,10 +206,10 @@ def group_segments(speaker_segments):
 
 if __name__ == "__main__":
     hp = Hyperparameters()
-    model_path = "best_model_06-12-2024_22-16-57.pth"
+    model_path = "500_vox_10_50_epoch.pth"
     if hp.eval_dataset == "data_conv":
         audio_path = "data_conv/eval/voxconverse_test_wav"
-        random.seed(123)
+        random.seed(124)
         audio_files = []
         for audio_file in os.listdir(audio_path):
             if audio_file.endswith(".wav"):
@@ -221,7 +221,7 @@ if __name__ == "__main__":
             # randomly select a file
             file = random.choice(audio_files)
             print(f"Running diarization on {file}")
-            _, der = run_diarization(file, model_path, sigma=10.5, percentile=98, num_speakers=2)
+            _, der = run_diarization(file, model_path, sigma=3, percentile=95)
             der_list.append(der)
 
         # average the der
@@ -231,7 +231,7 @@ if __name__ == "__main__":
         der_list = []
         for i in range(0, 10):
             audio_path = "mixed_audio.wav"
-            _, der = run_diarization(audio_path, model_path, seed=i)
+            _, der = run_diarization(audio_path, model_path, seed=i, sigma=5, percentile=95)
             der_list.append(der)
         # average the der
         average_der = np.mean(der_list)
@@ -241,9 +241,9 @@ if __name__ == "__main__":
         audio_path = "data_call/index.duckdb"
         der_list = []
         for i in range(0, 10):
-            random.seed(i+5)
+            random.seed(i)
             n = random.randint(0, 139)
-            _, der = run_diarization(audio_path, model_path, callhome_index=n, sigma=3, percentile=85, num_speakers=2)
+            _, der = run_diarization(audio_path, model_path, callhome_index=n, sigma=0.7, percentile=95)
             der_list.append(der)
         # average the der
         average_der = np.mean(der_list)

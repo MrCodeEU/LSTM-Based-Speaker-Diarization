@@ -7,10 +7,10 @@ import torchinfo
 import tqdm
 from matplotlib import pyplot as plt
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler, BatchSampler
 from config import Hyperparameters
-from dataset import SpeakerDataset
-from model import LSTMModel, ge2e_loss
+from dataset import SpeakerDataset, MultipleSpeakersBatchSampler
+from model import LSTMModel, ge2e_loss, ge2e_loss_softmax
 from utils import extract_and_label_features
 
 
@@ -41,7 +41,18 @@ def main():
     print("Unique numeric labels: ", set(numeric_labels))
 
     train_dataset = SpeakerDataset(log_mel_spectrograms, numeric_labels)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # Create the speaker_to_indices dictionary
+    speaker_to_indices = {}
+    for idx, label in enumerate(numeric_labels):
+        if label not in speaker_to_indices:
+            speaker_to_indices[label] = []
+        speaker_to_indices[label].append(idx)
+
+    # Create the custom batch sampler
+    speakers_per_batch = hp.num_speakers
+    samples_per_speaker = hp.num_segments
+    batch_sampler = MultipleSpeakersBatchSampler(speaker_to_indices, speakers_per_batch, samples_per_speaker)
+    train_loader = DataLoader(train_dataset, batch_sampler=batch_sampler)
 
     # ---------------------- 3. Initialize the Model, Loss, and Optimizer ---------------------- #
     # Create the model
@@ -54,7 +65,7 @@ def main():
     b.to(device)
     # Define the optimizer
     optimizer = torch.optim.Adam(list(model.parameters()) + [w, b], lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True,
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2, verbose=True,
                                                            threshold=0.01)
     model.to(device)
     # print the model information
@@ -64,7 +75,7 @@ def main():
     train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader, w)
 
 
-def train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader, w, patience=5, delta=0.01):
+def train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader, w, patience=5, delta=0.005):
     train_losses = []
     best_loss = np.inf
     patience_counter = 0
@@ -79,7 +90,8 @@ def train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader
             labels = labels.to(device)
             optimizer.zero_grad()
             embeddings = model(segments)
-            loss = ge2e_loss(embeddings, labels, w, b, device)
+            # loss = ge2e_loss(embeddings, labels, w, b, device)
+            loss = ge2e_loss_softmax(embeddings, labels, w, b, device)
             loss.backward()
 
             # Apply gradient clipping
@@ -90,7 +102,8 @@ def train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader
 
         epoch_loss /= len(train_loader)
         train_losses.append(epoch_loss)
-        print(f"Loss: {epoch_loss:.4f}")
+        print(f"Loss: {epoch_loss:.4f}, Learning Rate: {optimizer.param_groups[0]['lr']:.4f}, w: {w.item():.4f}, b: "
+              f"{b.item():.4f}")
 
         scheduler.step(epoch_loss)  # Update the learning rate based on the epoch loss
 

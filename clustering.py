@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.ndimage import gaussian_filter
@@ -9,8 +11,14 @@ from sklearn.metrics import silhouette_score
 from visualize import visualize_affinity_matrix_refinement
 
 
-def spectral_clustering(embeddings, sigma=4, percentile=95, n_clusters=None, max_clusters=18, visualize=False, visualizeCluster=True, random_state=0):
-    # visualise the embeddings using t-SNE
+def custom_distance(X):
+    cos_sim = 1 - squareform(pdist(X, metric='cosine'))
+    return (1 - cos_sim) / 2
+
+
+def spectral_clustering(embeddings, sigma=0.5, percentile=95, n_clusters=None, max_clusters=18, visualize=False,
+                        visualizeCluster=True, random_state=0):
+    # visualise the embeddings using pca
     if visualizeCluster:
         pca = PCA(n_components=2)
         embeddings = pca.fit_transform(embeddings)
@@ -18,9 +26,9 @@ def spectral_clustering(embeddings, sigma=4, percentile=95, n_clusters=None, max
         plt.title("PCA of Embeddings")
         plt.show()
     # Step 1: Construct the affinity matrix A based on cosine similarity
-    A = squareform(pdist(embeddings, 'cosine'))  # Compute pairwise cosine distances
+    A = squareform(pdist(embeddings, metric=custom_distance))  # Compute pairwise cosine distances
     A = 1 - A  # Convert distances to similarities
-    #np.fill_diagonal(A, A.max(axis=1))  # Set diagonal elements to the maximum of each row
+    # np.fill_diagonal(A, A.max(axis=1))  # Set diagonal elements to the maximum of each row
     np.fill_diagonal(A, 0)  # Set diagonal elements to 0
 
     if visualize:
@@ -34,8 +42,8 @@ def spectral_clustering(embeddings, sigma=4, percentile=95, n_clusters=None, max
     # Step 2b: Row-wise Thresholding
     for i in range(A.shape[0]):
         threshold = np.percentile(A[i], percentile)
-        # A[i, A[i] < threshold] *= 0.001
-        A[i, A[i] < threshold] = 0
+        A[i, A[i] < threshold] *= 0.001
+        # A[i, A[i] < threshold] = 0
     if visualize:
         visualize_affinity_matrix_refinement(A, "Row-wise Thresholding", percentile=percentile)
 
@@ -90,7 +98,8 @@ def spectral_clustering(embeddings, sigma=4, percentile=95, n_clusters=None, max
     if visualizeCluster:
         # visualize the clusters
         plt.scatter(new_embeddings[:, 0], new_embeddings[:, 1], c=labels, s=50, cmap='viridis')
-        plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], s=200, c='red', marker='*', label='Centroids')
+        plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], s=200, c='red', marker='*',
+                    label='Centroids')
         plt.xlabel('Feature 1')
         plt.ylabel('Feature 2')
         plt.title(f"Spectral Clustering with {n_clusters} Clusters")
@@ -124,7 +133,8 @@ def offline_kmeans(embeddings, max_clusters=10, random_state=0):
 
     # Step 3 (Optional): Visualize the clusters
     plt.scatter(embeddings[:, 0], embeddings[:, 1], c=labels, s=50, cmap='viridis')
-    plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], s=200, c='red', marker='*', label='Centroids')
+    plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], s=200, c='red', marker='*',
+                label='Centroids')
     plt.xlabel('Feature 1')
     plt.ylabel('Feature 2')
     plt.title(f"K-means Clustering with {optimal_k} Clusters")

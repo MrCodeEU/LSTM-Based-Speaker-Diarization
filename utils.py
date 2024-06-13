@@ -181,11 +181,11 @@ def extract_and_label_features_voxceleb(hp, train_dir, sr=16000):
             audio_files[speaker_id] = audio_files_id
 
         # DEBUG LIMIT THE NUMBER OF audio_files FOR TESTING per speaker to n random audio files
-        # n = 20
-        # audio_files = {speaker_id: random.sample(audio_files_id, n) for speaker_id, audio_files_id in audio_files.items()}
+        n = 10
+        audio_files = {speaker_id: random.sample(audio_files_id, n) for speaker_id, audio_files_id in audio_files.items()}
 
         # DEBUG LIMIT THE NUMBER OF SPEAKERS FOR TESTING to n random speakers
-        n = 50
+        n = 500
         audio_files = dict(random.sample(list(audio_files.items()), n))
         for speaker_id, audio_files_id in audio_files.items():
             print(f"Speaker: {speaker_id}, Number of audio files: {len(audio_files_id)}")
@@ -341,6 +341,8 @@ def create_mixed_audio(data_dir, n_speakers, max_files_per_speaker, silence_dura
 
         for file in selected_files:
             audio, sr = librosa.load(file, sr=None)
+            target_rms = 0.1
+            audio = librosa.util.normalize(audio, norm=np.inf, threshold=target_rms)
             segment_duration = len(audio) / sr
             ground_truth_segments[Segment(current_time, current_time + segment_duration)] = speaker
             current_time += segment_duration
