@@ -1,6 +1,8 @@
 import random
 from torch.utils.data import BatchSampler, Dataset
 
+from config import Hyperparameters
+
 
 class SpeakerDataset(Dataset):
     def __init__(self, log_mel_spectrograms, labels):
@@ -27,10 +29,15 @@ class MultipleSpeakersBatchSampler(BatchSampler):
         self.speakers_per_batch = speakers_per_batch
         self.samples_per_speaker = samples_per_speaker
         self.batch_size = speakers_per_batch * samples_per_speaker
+        self.seed = 12345
 
     def __iter__(self):
+        random.seed(self.seed)
         indices_per_speaker = {speaker: list(indices) for speaker, indices in self.speaker_to_indices.items()}
         num_batches = len(self)
+
+        if Hyperparameters.dyn_num_speakers:
+            self.speakers_per_batch = random.randint(Hyperparameters.min_num_speakers, Hyperparameters.max_num_speakers)
 
         for _ in range(num_batches):
             speakers = random.sample(list(indices_per_speaker.keys()), self.speakers_per_batch)

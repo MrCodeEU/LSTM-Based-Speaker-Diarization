@@ -13,8 +13,6 @@ class LSTMModel(nn.Module):
         _, (hidden, _) = self.lstm(x)
         d_vector = hidden[-1]  # Get the last hidden state
         d_vector = self.projection(d_vector)  # Apply linear projection
-        # l2 normalization will be done outside of model
-        # d_vector = d_vector / torch.norm(d_vector, dim=-1, keepdim=True)
         return d_vector
 
 

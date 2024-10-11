@@ -13,8 +13,8 @@ def eval_diarization(predicted_segments: Annotation, ground_truth_segments: Anno
     print(f"Diarization Error Rate (DER): {der_result:.2%}")
 
     jer = dia.JaccardErrorRate(collar=collar, skip_overlap=True)
-    result = jer(ground_truth_segments, predicted_segments)
-    print(f"JER: {abs(result)}")
+    jer_result = jer(ground_truth_segments, predicted_segments)
+    print(f"JER: {abs(jer_result)}")
 
     purity = dia.DiarizationPurity(collar=collar, skip_overlap=True)
     purity_result = purity(ground_truth_segments, predicted_segments)
@@ -32,7 +32,7 @@ def eval_diarization(predicted_segments: Annotation, ground_truth_segments: Anno
     ier_result = ier(ground_truth_segments, predicted_segments)
     print(f"Identification Error Rate (IER): {ier_result:.2%}")
 
-    return der_result
+    return der_result, jer_result, purity_result, coverage_result, completeness_result, ier_result
 
 
 def annotation_to_rttm(annotation: Annotation, file_name: str, output_path: str = None):

@@ -6,7 +6,7 @@ import soundfile as sf
 import torch
 #from datasets import load_dataset
 from pyannote.core import Annotation, Segment
-from clustering import spectral_clustering, offline_kmeans
+from clustering import spectral_clustering, offline_kmeans, dbscan_clustering, agglomerative_clustering
 from config import Hyperparameters
 from eval import eval_diarization, annotation_to_rttm
 from extract_features import extract_features
@@ -146,45 +146,64 @@ def run_diarization(audio_path, model_path, segment_length=30, overlap=10, num_s
 
     print(f"Number of aggregated d-vectors: {len(d_vectors)}")
 
-    # Clustering
-    labels = spectral_clustering(d_vectors, sigma=sigma, percentile=percentile, random_state=seed, visualizeCluster=True, visualize=True)
-    # labels = offline_kmeans(d_vectors, max_clusters=10, random_state=0)
+    # Dictionary of clustering algorithms and their functions
+    clustering_algorithms = {
+        'Spectral': lambda: spectral_clustering(d_vectors, sigma=sigma, percentile=percentile, random_state=seed,
+                                                visualizeCluster=True, visualize=False),
+        'K-means': lambda: offline_kmeans(d_vectors, max_clusters=10, random_state=0),
+        'DBSCAN': lambda: dbscan_clustering(d_vectors, eps=7, min_samples=20),
+        'Agglomerative': lambda: agglomerative_clustering(d_vectors)
+    }
 
-    print(f"Number of speakers: {len(np.unique(labels))}")
-    print(f"Speaker labels: {labels}")
+    results = {}
 
-    # Associate speaker labels with start times
-    speaker_segments = []
-    for i in range(len(labels)):
-        start_time = start_times[i]
-        end_time = start_time + target_segment_length / 1000
-        speaker_id = labels[i]
-        speaker_segments.append((start_time, end_time, speaker_id))
+    for algo_name, clustering_func in clustering_algorithms.items():
+        print(f"\nProcessing {algo_name} clustering:")
 
-    print("Number of speakers after filtering: ", len(np.unique([s[2] for s in speaker_segments])))
+        # Execute the clustering function
+        labels = clustering_func()
 
-    # groups consecutive segments with the same speaker
-    speaker_segments = group_segments(speaker_segments)
+        print(f"Number of speakers: {len(np.unique(labels))}")
+        # print(f"Speaker labels: {labels}")
 
-    speaker_segments_annotations = Annotation()
-    # Print the diarization results
-    print("Speaker Diarization Results:")
-    for start_time, end_time, speaker_id in speaker_segments:
-        print(f"Speaker {speaker_id}: {start_time:.2f} - {end_time:.2f}")
-        speaker_segments_annotations[Segment(start_time, end_time)] = f"spk{speaker_id:02d}"
+        # Associate speaker labels with start times
+        speaker_segments = []
+        for i in range(len(labels)):
+            start_time = start_times[i]
+            end_time = start_time + target_segment_length / 1000
+            speaker_id = labels[i]
+            speaker_segments.append((start_time, end_time, speaker_id))
 
-    # evaluate the diarization
-    metrics = eval_diarization(speaker_segments_annotations, ground_truth_segments)
+        print("Number of speakers after filtering: ", len(np.unique([s[2] for s in speaker_segments])))
 
-    # save both the ground truth and predicted segments to rttm files
-    annotation_to_rttm(speaker_segments_annotations, "predicted", output_path="predicted.rttm")
-    annotation_to_rttm(ground_truth_segments, "ground_truth", output_path="ground_truth.rttm")
+        # groups consecutive segments with the same speaker
+        speaker_segments = group_segments(speaker_segments)
 
-    # Visualize the ground truth and predicted speaker segments
-    if visualise:
-        visualize_diarization(audio, sr, ground_truth_segments, speaker_segments_annotations)
+        speaker_segments_annotations = Annotation()
+        # Print the diarization results
+        print(f"{algo_name} Speaker Diarization Results:")
+        for start_time, end_time, speaker_id in speaker_segments:
+            # print(f"Speaker {speaker_id}: {start_time:.2f} - {end_time:.2f}")
+            speaker_segments_annotations[Segment(start_time, end_time)] = f"spk{speaker_id:02d}"
 
-    return speaker_segments, metrics
+        # evaluate the diarization
+        metrics = eval_diarization(speaker_segments_annotations, ground_truth_segments)
+
+        # save both the ground truth and predicted segments to rttm files
+        annotation_to_rttm(speaker_segments_annotations, f"{algo_name}_predicted",
+                           output_path=f"{algo_name}_predicted.rttm")
+        annotation_to_rttm(ground_truth_segments, "ground_truth", output_path="ground_truth.rttm")
+
+        # Visualize the ground truth and predicted speaker segments
+        if visualise:
+            visualize_diarization(audio, sr, ground_truth_segments, speaker_segments_annotations, algo_name)
+
+        results[algo_name] = {
+            'segments': speaker_segments,
+            'metrics': metrics
+        }
+
+    return results, len(ground_truth_segments.labels())
 
 
 def group_segments(speaker_segments):
@@ -209,35 +228,65 @@ def group_segments(speaker_segments):
 
 if __name__ == "__main__":
     hp = Hyperparameters()
-    model_path = "size_4_768.pth"
+    model_path = "500_vox_10_early_stop.pth"
     if hp.eval_dataset == "data_conv" or True:
         print("Running diarization on VoxConverse test set")
         audio_path = "data_conv/eval/voxconverse_test_wav"
-        random.seed(12)
+        random.seed(22)
         audio_files = []
         for audio_file in os.listdir(audio_path):
             if audio_file.endswith(".wav"):
                 audio_files.append(os.path.join(audio_path, audio_file))
 
-        metrics_list = []
+        results_list = []
 
         for i in range(1, 31):
-            # randomly select a file
             file = random.choice(audio_files)
             print(f"Running diarization on {file}")
-            _, metrics = run_diarization(file, model_path, sigma=8, percentile=90)
-            metrics_list.append(metrics)
+            results, actual_speakers = run_diarization(file, model_path, sigma=5, percentile=90)
 
-        #save the der values in csv file with current timestamp
-        # with column names: der, jer, purity, coverage, completeness, ier
-        with open(f"der_values_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.csv", mode='w') as file:
-            writer = csv.writer(file)
-            writer.writerow(["der", "jer", "purity", "coverage", "completeness", "ier"])
-            for metrics in metrics_list:
-                writer.writerow([metrics[0], metrics[1], metrics[2], metrics[3], metrics[4], metrics[5]])
-        # average the der
-        average_der = np.mean(metrics_list)
-        print(f"Average DER: {average_der:.2%}")
+            for algo_name, algo_results in results.items():
+                predicted_speakers = len(set(segment[2] for segment in algo_results['segments']))
+                speaker_diff = predicted_speakers - actual_speakers
+
+                results_list.append({
+                    'file': os.path.basename(file),
+                    'algorithm': algo_name,
+                    'der': algo_results['metrics'][0],
+                    'jer': algo_results['metrics'][1],
+                    'purity': algo_results['metrics'][2],
+                    'coverage': algo_results['metrics'][3],
+                    'completeness': algo_results['metrics'][4],
+                    'ier': algo_results['metrics'][5],
+                    'speaker_diff': speaker_diff
+                })
+
+            # Save the results in a CSV file with current timestamp
+        timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
+        with open(f"diarization_results_{timestamp}.csv", mode='w', newline='') as file:
+            fieldnames = ['file', 'algorithm', 'der', 'jer', 'purity', 'coverage', 'completeness', 'ier',
+                          'speaker_diff']
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            for result in results_list:
+                writer.writerow(result)
+
+        # Calculate and print average metrics for each algorithm
+        algorithms = set(result['algorithm'] for result in results_list)
+        for algo in algorithms:
+            algo_results = [r for r in results_list if r['algorithm'] == algo]
+            avg_metrics = {
+                'der': np.mean([r['der'] for r in algo_results]),
+                'jer': np.mean([r['jer'] for r in algo_results]),
+                'purity': np.mean([r['purity'] for r in algo_results]),
+                'coverage': np.mean([r['coverage'] for r in algo_results]),
+                'completeness': np.mean([r['completeness'] for r in algo_results]),
+                'ier': np.mean([r['ier'] for r in algo_results]),
+                'speaker_diff': np.mean([abs(r['speaker_diff']) for r in algo_results])
+            }
+            print(f"\nAverage metrics for {algo}:")
+            for metric, value in avg_metrics.items():
+                print(f"{metric}: {value:.2%}")
     elif hp.eval_dataset == "data_vox":
         der_list = []
         for i in range(0, 10):

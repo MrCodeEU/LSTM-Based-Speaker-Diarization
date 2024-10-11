@@ -1,0 +1,9 @@
+*.pth
+*.csv
+*.wav
+*.rttm
+*.pyc
+*.txt
+*.xml
+*.npy
+*.duckdb

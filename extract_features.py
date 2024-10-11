@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 
-def extract_features(segment, sr, n_mels=40, n_fft=256, hop_length=80):
+def extract_features(segment, sr, n_mels=40, n_fft=128, hop_length=40):
     # Ensure segment is a numpy array
     audio_segment = segment.numpy() if isinstance(segment, torch.Tensor) else segment
 

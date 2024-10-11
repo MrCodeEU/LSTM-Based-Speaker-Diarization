@@ -2,14 +2,16 @@ import glob
 import os
 import random
 from multiprocessing import Pool
-
+from audiomentations import Compose, AddBackgroundNoise  # Library for audio data augmentation
 import duckdb
 import librosa
 import numpy as np
 from pyannote.core import Annotation, Segment
 from tqdm import tqdm
 import visualize
-from preprocessing import process_segment, segment_audio, load_segments
+from preprocessing import process_segment, segment_audio, load_segments, apply_vad
+import noisereduce as nr
+import sounddevice as sd
 
 
 def binary_search(segments_from_xml, start_time):
@@ -118,8 +120,9 @@ def binary_search_rttm(rttm_segments, start_time):
     return None
 
 
-def extract_and_label_features_voxconverse(hp, train_dir, segments_dir, sr=16000):
-    if not os.path.exists(hp.dataset + "/log_mel_spectrograms.npy") and not os.path.exists(hp.dataset + "/labels.npy"):
+def extract_and_label_features_voxconverse(hp, train_dir, segments_dir, sr=16000, train=True):
+    save_dir = hp.dataset + "/train" if train else hp.dataset + "/eval"
+    if not os.path.exists(save_dir + "/log_mel_spectrograms.npy") and not os.path.exists(save_dir + "/labels.npy"):
         train_dir = os.path.join(train_dir, "audio")
         speech_segments = {}
         for audio_file in os.listdir(train_dir):
@@ -154,22 +157,38 @@ def extract_and_label_features_voxconverse(hp, train_dir, segments_dir, sr=16000
         print(f"Number of log mel spectrograms: {len(log_mel_spectrograms)}")
         print(f"Shape of log mel spectrogram: {log_mel_spectrograms[0].shape}")
 
-        np.save(hp.dataset + "/log_mel_spectrograms.npy", log_mel_spectrograms)
-        np.save(hp.dataset + "/labels.npy", labels)
+        np.save(save_dir + "/log_mel_spectrograms.npy", log_mel_spectrograms)
+        np.save(save_dir + "/labels.npy", labels)
     else:
-        log_mel_spectrograms = np.load(hp.dataset + "/log_mel_spectrograms.npy")
-        labels = np.load(hp.dataset + "/labels.npy")
+        log_mel_spectrograms = np.load(save_dir + "/log_mel_spectrograms.npy")
+        labels = np.load(save_dir + "/labels.npy")
         print(f"Number of log mel spectrograms: {len(log_mel_spectrograms)}")
         print(f"Shape of log mel spectrogram: {log_mel_spectrograms[0].shape}")
 
-    visualize.plot_spectrograms(log_mel_spectrograms, labels)
+        visualize.plot_spectrograms(log_mel_spectrograms, labels)
 
     return labels, log_mel_spectrograms
 
 
-def extract_and_label_features_voxceleb(hp, train_dir, sr=16000):
+def add_noise_augmentation(audio, sr, augment_obj):
+    """Applies noise augmentation using a pre-created augment object."""
+    return augment_obj(samples=audio, sample_rate=sr)
+
+
+def extract_and_label_features_voxceleb(hp, train_dir, sr=16000, train=True):
     log_mel_spectrograms = None
-    if not os.path.exists(hp.dataset + "/log_mel_spectrograms.npy") and not os.path.exists(hp.dataset + "/labels.npy"):
+
+    # Load noise data and create the augment object once
+    noise_augment = AddBackgroundNoise(
+        sounds_path=hp.noise_dir,
+        min_snr_in_db=5,
+        max_snr_in_db=20,
+        p=0.0
+    )
+
+    save_dir = hp.dataset + "/train" if train else hp.dataset + "/eval"
+
+    if not os.path.exists(save_dir + "/log_mel_spectrograms.npy") and not os.path.exists(save_dir+ "/labels.npy"):
         # Iterate over speaker directories and get the audio files per speaker recursively
         audio_files = {}
         for speaker_id in os.listdir(train_dir):
@@ -181,11 +200,14 @@ def extract_and_label_features_voxceleb(hp, train_dir, sr=16000):
             audio_files[speaker_id] = audio_files_id
 
         # DEBUG LIMIT THE NUMBER OF audio_files FOR TESTING per speaker to n random audio files
-        n = 10
-        audio_files = {speaker_id: random.sample(audio_files_id, n) for speaker_id, audio_files_id in audio_files.items()}
+        n = 20
+        audio_files = {speaker_id: random.sample(audio_files_id, n) for speaker_id, audio_files_id in
+                       audio_files.items()}
 
         # DEBUG LIMIT THE NUMBER OF SPEAKERS FOR TESTING to n random speakers
-        n = 500
+        n = 200
+        if train_dir == "data_vox/eval":
+            n = 40
         audio_files = dict(random.sample(list(audio_files.items()), n))
         for speaker_id, audio_files_id in audio_files.items():
             print(f"Speaker: {speaker_id}, Number of audio files: {len(audio_files_id)}")
@@ -199,6 +221,7 @@ def extract_and_label_features_voxceleb(hp, train_dir, sr=16000):
                 audio, _ = librosa.load(audio_file, sr=sr)
                 target_rms = 0.1
                 audio = librosa.util.normalize(audio, norm=np.inf, threshold=target_rms)
+                audio = add_noise_augmentation(audio, sr, noise_augment)
                 segments_id, sr = segment_audio(audio, sr)
                 segments.extend(segments_id)
             speech_segments[speaker_id] = segments
@@ -212,34 +235,34 @@ def extract_and_label_features_voxceleb(hp, train_dir, sr=16000):
         print(f"Shape of log mel spectrogram: {log_mel_spectrograms[0].shape}")
 
         # save the log mel spectrograms and labels to a file
-        np.save(hp.dataset + "/log_mel_spectrograms.npy", log_mel_spectrograms)
-        np.save(hp.dataset + "/labels.npy", labels)
+        np.save(save_dir + "/log_mel_spectrograms.npy", log_mel_spectrograms)
+        np.save(save_dir + "/labels.npy", labels)
 
     else:
-        log_mel_spectrograms = np.load(hp.dataset + "/log_mel_spectrograms.npy")
-        labels = np.load(hp.dataset + "/labels.npy")
+        log_mel_spectrograms = np.load(save_dir + "/log_mel_spectrograms.npy")
+        labels = np.load(save_dir + "/labels.npy")
         print(f"Number of log mel spectrograms: {len(log_mel_spectrograms)}")
         print(f"Shape of log mel spectrogram: {log_mel_spectrograms[0].shape}")
 
-    # Visualize log mel spectrograms for each speaker
-    visualize.plot_spectrograms(log_mel_spectrograms, labels)
+        # Visualize log mel spectrograms for each speaker
+        visualize.plot_spectrograms(log_mel_spectrograms, labels)
 
     return labels, log_mel_spectrograms
 
 
-def extract_and_label_features(hp, segments_dir, train_dir):
+def extract_and_label_features(hp, segments_dir, train_dir, train=True):
     # TODO name npy files after used hyperparameters
     if hp.dataset == "data_icsi":
-        labels, log_mel_spectrograms = extract_and_label_features_icsi(hp, segments_dir, train_dir)
+        labels, log_mel_spectrograms = extract_and_label_features_icsi(hp, segments_dir, train_dir, train=train)
     elif hp.dataset == "data_vox":
-        labels, log_mel_spectrograms = extract_and_label_features_voxceleb(hp, train_dir)
+        labels, log_mel_spectrograms = extract_and_label_features_voxceleb(hp, train_dir,train=train)
     else:
-        labels, log_mel_spectrograms = extract_and_label_features_voxconverse(hp, train_dir, segments_dir)
+        labels, log_mel_spectrograms = extract_and_label_features_voxconverse(hp, train_dir, segments_dir, train=train)
 
     return labels, log_mel_spectrograms
 
 
-def extract_and_label_features_icsi(hp, segments_dir, train_dir):
+def extract_and_label_features_icsi(hp, segments_dir, train_dir, train=True):
     if not os.path.exists(hp.dataset + "/log_mel_spectrograms.npy") and not os.path.exists(hp.dataset + "/labels.npy"):
         # Iterate over the meeting directories
         for meeting_dir in os.listdir(train_dir):
@@ -316,8 +339,8 @@ def extract_and_label_features_icsi(hp, segments_dir, train_dir):
         print(f"Number of log mel spectrograms: {len(log_mel_spectrograms)}")
         print(f"Shape of log mel spectrogram: {log_mel_spectrograms[0].shape}")
 
-    # Visualize log mel spectrograms for each speaker
-    visualize.plot_spectrograms(log_mel_spectrograms, labels)
+        # Visualize log mel spectrograms for each speaker
+        visualize.plot_spectrograms(log_mel_spectrograms, labels)
 
     return labels, log_mel_spectrograms
 
@@ -403,6 +426,12 @@ def load_dataset_callhome(audio_path, index):
 
     target_rms = 0.1
     audio_float = librosa.util.normalize(audio_float, norm=np.inf, threshold=target_rms)
+
+    # denoise the audio
+    audio_float = nr.reduce_noise(y=audio_float, sr=sample_rate)
+
+    # sd.play(audio_float, sample_rate)
+    #
 
     # Create an Annotation object
     annotation = Annotation()

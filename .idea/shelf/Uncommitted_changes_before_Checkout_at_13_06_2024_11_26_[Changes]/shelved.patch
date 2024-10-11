@@ -1,0 +1,374 @@
+Index: train.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import datetime\r\n\r\nimport numpy as np\r\nimport torch\r\nimport torch.utils.data\r\nimport torchinfo\r\nimport tqdm\r\nfrom matplotlib import pyplot as plt\r\nfrom torch import nn\r\nfrom torch.utils.data import DataLoader\r\nfrom config import Hyperparameters\r\nfrom dataset import SpeakerDataset, BalancedSpeakerSampler\r\nfrom model import LSTMModel, ge2e_loss\r\nfrom utils import extract_and_label_features\r\n\r\n\r\ndef main():\r\n    # ---------------------- 0. Set the Hyperparameters --------------------- #\r\n    # Define the model parameters\r\n    hp = Hyperparameters()\r\n    input_size = hp.input_size  # Assuming log mel filterbank energies of dimension 40\r\n    hidden_size = hp.hidden_size\r\n    num_layers = hp.num_layers\r\n    projection_size = hp.projection_size\r\n    # Training loop\r\n    num_epochs = hp.num_epochs\r\n    batch_size = hp.batch_size\r\n    learning_rate = hp.learning_rate\r\n    # ---------------------- 1. Load and Segment Audio ---------------------- #\r\n    # Set the path to your training data_icsi directory\r\n    train_dir = hp.dataset + \"/train\"\r\n    # Set the path to your segments directory\r\n    segments_dir = hp.dataset + \"/segments\"\r\n\r\n    labels, log_mel_spectrograms = extract_and_label_features(hp, segments_dir, train_dir)\r\n\r\n    # ---------------------- 2. Create the Dataset and DataLoader ---------------------- #\r\n    # Convert labels to numeric and then create the dataset and data_icsi loader\r\n    label_to_id = {label: i for i, label in enumerate(set(labels))}\r\n    numeric_labels = [label_to_id[label] for label in labels]\r\n    print(\"Unique numeric labels: \", set(numeric_labels))\r\n\r\n    train_dataset = SpeakerDataset(log_mel_spectrograms, numeric_labels)\r\n    train_sampler = BalancedSpeakerSampler(train_dataset, batch_size, min_speakers_per_batch=hp.min_speakers_per_batch,\r\n                                           min_segments_per_speaker=hp.min_segments_per_speaker)\r\n    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler)\r\n\r\n    # ---------------------- 3. Initialize the Model, Loss, and Optimizer ---------------------- #\r\n    # Create the model\r\n    model = LSTMModel(input_size, hidden_size, num_layers, projection_size)\r\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\r\n    print(f\"Using device: {device}\")\r\n    w = nn.Parameter(torch.tensor(10.0))  # Initialize w as a learnable parameter\r\n    b = nn.Parameter(torch.tensor(-5.0))  # Initialize b as a learnable parameter\r\n    w.to(device)\r\n    b.to(device)\r\n    # Define the optimizer\r\n    optimizer = torch.optim.Adam(list(model.parameters()) + [w, b], lr=learning_rate)\r\n    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=3, verbose=True,\r\n                                                           threshold=0.01)\r\n    model.to(device)\r\n    # print the model information\r\n    torchinfo.summary(model, input_size=(batch_size, 40))\r\n\r\n    # Train and save the best model with early stopping\r\n    train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader, w)\r\n\r\n\r\ndef train_model(b, device, model, num_epochs, optimizer, scheduler, train_loader, w, patience=5, delta=0.01):\r\n    train_losses = []\r\n    best_loss = np.inf\r\n    patience_counter = 0\r\n    best_model_path = f'best_model_{datetime.datetime.now().strftime(\"%m-%d-%Y_%H-%M-%S\")}.pth'\r\n\r\n    for epoch in range(num_epochs):\r\n        epoch_loss = 0.0\r\n\r\n        # Wrap the train_loader with tqdm to create a progress bar\r\n        for segments, labels in tqdm.tqdm(train_loader, desc=f\"Epoch {epoch + 1}/{num_epochs}\", unit=\"batch\"):\r\n            segments = segments.to(device)\r\n            labels = labels.to(device)\r\n            optimizer.zero_grad()\r\n            embeddings = model(segments)\r\n            loss = ge2e_loss(embeddings, labels, w, b, device)\r\n            loss.backward()\r\n\r\n            # Apply gradient clipping\r\n            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Clip to a maximum norm of 1.0\r\n\r\n            optimizer.step()\r\n            epoch_loss += loss.item()\r\n\r\n        epoch_loss /= len(train_loader)\r\n        train_losses.append(epoch_loss)\r\n        print(f\"Loss: {epoch_loss:.4f}, Learning Rate: {scheduler.get_last_lr()[0]:.6f}\")\r\n\r\n        scheduler.step(epoch_loss)  # Update the learning rate based on the epoch loss\r\n\r\n        # Check if the current loss is the best we've seen so far\r\n        if epoch_loss < best_loss - delta:\r\n            best_loss = epoch_loss\r\n            patience_counter = 0\r\n            # Save the best model\r\n            torch.save(model.state_dict(), best_model_path)\r\n            print(f\"Best model saved with loss {best_loss:.4f}\")\r\n        else:\r\n            patience_counter += 1\r\n\r\n        # Early stopping if the patience counter exceeds the patience threshold\r\n        if patience_counter >= patience:\r\n            print(\"Early stopping triggered.\")\r\n            break\r\n\r\n    # Visualize the training loss\r\n    plt.figure(figsize=(8, 5))\r\n    plt.plot(range(1, len(train_losses) + 1), train_losses)\r\n    plt.xlabel(\"Epoch\")\r\n    plt.ylabel(\"Training Loss\")\r\n    plt.title(\"Training Loss vs. Epochs\")\r\n    plt.show()\r\n\r\n    print(f\"Training completed. Best model saved to {best_model_path} with loss {best_loss:.4f}\")\r\n\r\n\r\nif __name__ == \"__main__\":\r\n    main()\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/train.py b/train.py
+--- a/train.py	
++++ b/train.py	
+@@ -43,7 +43,8 @@
+     train_dataset = SpeakerDataset(log_mel_spectrograms, numeric_labels)
+     train_sampler = BalancedSpeakerSampler(train_dataset, batch_size, min_speakers_per_batch=hp.min_speakers_per_batch,
+                                            min_segments_per_speaker=hp.min_segments_per_speaker)
+-    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler)
++    train_loader = DataLoader(train_dataset, batch_sampler=train_sampler, num_workers=4, pin_memory=True,
++                              prefetch_factor=2)
+ 
+     # ---------------------- 3. Initialize the Model, Loss, and Optimizer ---------------------- #
+     # Create the model
+Index: .idea/.gitignore
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/.gitignore b/.idea/.gitignore
+new file mode 100644
+--- /dev/null	
++++ b/.idea/.gitignore	
+@@ -0,0 +1,8 @@
++# Default ignored files
++/shelf/
++/workspace.xml
++# Editor-based HTTP Client requests
++/httpRequests/
++# Datasource local storage ignored files
++/dataSources/
++/dataSources.local.xml
+Index: .idea/modules.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/modules.xml b/.idea/modules.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/modules.xml	
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="ProjectModuleManager">
++    <modules>
++      <module fileurl="file://$PROJECT_DIR$/.idea/BA_Speaker_Diarization_GEM.iml" filepath="$PROJECT_DIR$/.idea/BA_Speaker_Diarization_GEM.iml" />
++    </modules>
++  </component>
++</project>
+\ No newline at end of file
+Index: .gitignore
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+--- /dev/null	
++++ b/.gitignore	
+@@ -0,0 +1,163 @@
++### Python template
++# Byte-compiled / optimized / DLL files
++__pycache__/
++*.py[cod]
++*$py.class
++
++# C extensions
++*.so
++
++# Distribution / packaging
++.Python
++build/
++develop-eggs/
++dist/
++downloads/
++eggs/
++.eggs/
++lib/
++lib64/
++parts/
++sdist/
++var/
++wheels/
++share/python-wheels/
++*.egg-info/
++.installed.cfg
++*.egg
++MANIFEST
++
++# PyInstaller
++#  Usually these files are written by a python script from a template
++#  before PyInstaller builds the exe, so as to inject date/other infos into it.
++*.manifest
++*.spec
++
++# Installer logs
++pip-log.txt
++pip-delete-this-directory.txt
++
++# Unit test / coverage reports
++htmlcov/
++.tox/
++.nox/
++.coverage
++.coverage.*
++.cache
++nosetests.xml
++coverage.xml
++*.cover
++*.py,cover
++.hypothesis/
++.pytest_cache/
++cover/
++
++# Translations
++*.mo
++*.pot
++
++# Django stuff:
++*.log
++local_settings.py
++db.sqlite3
++db.sqlite3-journal
++
++# Flask stuff:
++instance/
++.webassets-cache
++
++# Scrapy stuff:
++.scrapy
++
++# Sphinx documentation
++docs/_build/
++
++# PyBuilder
++.pybuilder/
++target/
++
++# Jupyter Notebook
++.ipynb_checkpoints
++
++# IPython
++profile_default/
++ipython_config.py
++
++# pyenv
++#   For a library or package, you might want to ignore these files since the code is
++#   intended to run in multiple environments; otherwise, check them in:
++# .python-version
++
++# pipenv
++#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
++#   However, in case of collaboration, if having platform-specific dependencies or dependencies
++#   having no cross-platform support, pipenv may install dependencies that don't work, or not
++#   install all needed dependencies.
++#Pipfile.lock
++
++# poetry
++#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
++#   This is especially recommended for binary packages to ensure reproducibility, and is more
++#   commonly ignored for libraries.
++#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
++#poetry.lock
++
++# pdm
++#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
++#pdm.lock
++#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
++#   in version control.
++#   https://pdm.fming.dev/#use-with-ide
++.pdm.toml
++
++# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
++__pypackages__/
++
++# Celery stuff
++celerybeat-schedule
++celerybeat.pid
++
++# SageMath parsed files
++*.sage.py
++
++# Environments
++.env
++.venv
++env/
++venv/
++ENV/
++env.bak/
++venv.bak/
++
++# Spyder project settings
++.spyderproject
++.spyproject
++
++# Rope project settings
++.ropeproject
++
++# mkdocs documentation
++/site
++
++# mypy
++.mypy_cache/
++.dmypy.json
++dmypy.json
++
++# Pyre type checker
++.pyre/
++
++# pytype static type analyzer
++.pytype/
++
++# Cython debug symbols
++cython_debug/
++
++# PyCharm
++#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
++#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
++#  and can be added to the global gitignore or merged into this file.  For a more nuclear
++#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
++.idea/
++models/
++data*/
+Index: .idea/BA_Speaker_Diarization_GEM.iml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/BA_Speaker_Diarization_GEM.iml b/.idea/BA_Speaker_Diarization_GEM.iml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/BA_Speaker_Diarization_GEM.iml	
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<module type="PYTHON_MODULE" version="4">
++  <component name="NewModuleRootManager">
++    <content url="file://$MODULE_DIR$" />
++    <orderEntry type="jdk" jdkName="Torch" jdkType="Python SDK" />
++    <orderEntry type="sourceFolder" forTests="false" />
++  </component>
++</module>
+\ No newline at end of file
+Index: .idea/other.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/other.xml b/.idea/other.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/other.xml	
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="PySciProjectComponent">
++    <option name="PY_INTERACTIVE_PLOTS" value="false" />
++    <option name="PY_INTERACTIVE_PLOTS_SUGGESTED" value="true" />
++  </component>
++</project>
+\ No newline at end of file
+Index: .idea/vcs.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/vcs.xml b/.idea/vcs.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/vcs.xml	
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="VcsDirectoryMappings">
++    <mapping directory="$PROJECT_DIR$" vcs="Git" />
++  </component>
++</project>
+\ No newline at end of file
+Index: .idea/inspectionProfiles/profiles_settings.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/inspectionProfiles/profiles_settings.xml b/.idea/inspectionProfiles/profiles_settings.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/inspectionProfiles/profiles_settings.xml	
+@@ -0,0 +1,6 @@
++<component name="InspectionProjectProfileManager">
++  <settings>
++    <option name="USE_PROJECT_PROFILE" value="false" />
++    <version value="1.0" />
++  </settings>
++</component>
+\ No newline at end of file
+Index: .idea/misc.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/misc.xml b/.idea/misc.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/misc.xml	
+@@ -0,0 +1,7 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<project version="4">
++  <component name="Black">
++    <option name="sdkName" value="Torch" />
++  </component>
++  <component name="ProjectRootManager" version="2" project-jdk-name="Torch" project-jdk-type="Python SDK" />
++</project>
+\ No newline at end of file
+Index: .idea/inspectionProfiles/Project_Default.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/inspectionProfiles/Project_Default.xml b/.idea/inspectionProfiles/Project_Default.xml
+new file mode 100644
+--- /dev/null	
++++ b/.idea/inspectionProfiles/Project_Default.xml	
+@@ -0,0 +1,44 @@
++<component name="InspectionProjectProfileManager">
++  <profile version="1.0">
++    <option name="myName" value="Project Default" />
++    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
++      <option name="ignoredPackages">
++        <value>
++          <list size="3">
++            <item index="0" class="java.lang.String" itemvalue="pytorch" />
++            <item index="1" class="java.lang.String" itemvalue="torch" />
++            <item index="2" class="java.lang.String" itemvalue="matplotlib" />
++          </list>
++        </value>
++      </option>
++    </inspection_tool>
++    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
++      <option name="ignoredErrors">
++        <list>
++          <option value="N806" />
++          <option value="N812" />
++          <option value="N803" />
++          <option value="N814" />
++        </list>
++      </option>
++    </inspection_tool>
++    <inspection_tool class="VulnerableLibrariesLocal" enabled="true" level="WARNING" enabled_by_default="true">
++      <option name="isIgnoringEnabled" value="true" />
++      <option name="ignoredModules">
++        <list>
++          <option value="BA_Speaker_Diarization_CV" />
++        </list>
++      </option>
++      <option name="ignoredPackages">
++        <list>
++          <option value="null:tensorflow:2.10.1" />
++        </list>
++      </option>
++      <option name="ignoredReasons">
++        <list>
++          <option value="Not exploitable" />
++        </list>
++      </option>
++    </inspection_tool>
++  </profile>
++</component>
+\ No newline at end of file

@@ -134,7 +134,7 @@ def get_speaker_color(speaker, color_map, available_colors):
     return color_map[speaker]
 
 
-def visualize_diarization(y, sr, ground_truth_segments: Annotation, speaker_segments_annotations: Annotation):
+def visualize_diarization(y, sr, ground_truth_segments: Annotation, speaker_segments_annotations: Annotation, clustering_algorithm: str):
     # Load audio file
     duration = librosa.get_duration(y=y, sr=sr)
 
@@ -169,7 +169,7 @@ def visualize_diarization(y, sr, ground_truth_segments: Annotation, speaker_segm
         color = get_speaker_color(speaker, predicted_color_map, predicted_colors)
         ax[2].axvspan(start, end, color=color, alpha=0.5, lw=0)
 
-    ax[2].set(title='Predicted Speaker Segments')
+    ax[2].set(title='Predicted Speaker Segments with ' + clustering_algorithm + ' Clustering')
 
     # Set x-axis labels
     ax[2].set_xlabel('Time (s)')
