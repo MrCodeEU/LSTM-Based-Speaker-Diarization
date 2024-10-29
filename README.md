@@ -155,7 +155,7 @@ If you use this code in your research, please cite:
   author={Reinegger, Michael},
   year={2024},
   institution={Johannes Kepler University Linz},
-  note={Available at: https://www.michaelreinegger.com/publications/speaker-diarization-lstm.pdf}
+  note={Available at: https://mljr.eu/papers/BA_Speaker_Diarization.pdf}
 }
 ```
 
