@@ -1,0 +1,9 @@
+{
+  "description": "Bachelor thesis implementation of an LSTM-based speaker diarization system, comparing LSTM and BiLSTM architectures for d-vector generation with multiple clustering algorithms and comprehensive hyperparameter analysis.",
+  "featured": false,
+  "tags": ["python", "machine-learning", "lstm", "speaker-diarization", "audio", "ai", "deep-learning", "thesis"],
+  "images": [
+    "https://picsum.photos/seed/lstm-diar1/800/450",
+    "https://picsum.photos/seed/lstm-diar2/800/450"
+  ]
+}
